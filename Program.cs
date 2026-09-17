@@ -1,22 +1,37 @@
-using System.Text;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<IExpenseService, ExpenseService>();
-var app = builder.Build();
+builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("SettingProgram"));
+var app = builder.Build();  
 
 
 
 app.MapGet("/GetAll", (IExpenseService exp) => Results.Ok(exp.GetAll()));
 app.MapGet("/GetById/{id:int:min(1)}", (IExpenseService exp, int id) => exp.GetById(id) is Expense ex ? Results.Ok(ex) : Results.NotFound());
-app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body) =>
+app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf) =>
 {
-    var res = exp.Create(new Expense(body.Amount, body.Category));
-    return Results.Created($"/GetById/{res.Id}", res);
+    if(conf.Value.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
+    {
+        var res = exp.Create(new Expense(body.Amount, body.Category));
+        return Results.Created($"/GetById/{res.Id}", res);
+    }
+    return Results.BadRequest($"Категория '{body.Category}' не разрешена");
 });
 app.MapDelete("/Delete/{id:int:min(1)}", (IExpenseService exp, int id) => exp.Delete(id) ? Results.NoContent() : Results.NotFound());
-app.Map("/", () => "Hi!");
+app.Map("/", (IOptions<AppSettings> conf) =>
+{
+    var op = conf.Value;
+    return op;
+} );
 app.Run();
 
+
+public class AppSettings
+{
+    public string Currency {get; set;} ="";
+    public string[] Categories {get; set;} = [];
+}
 public record CreateExpenseRequest(int Amount, string Category);
 public interface IExpenseService
 {
@@ -45,15 +60,15 @@ public class ExpenseService : IExpenseService
 public class Expense
 {
     public int Id {get; set;} 
-    public int amount {get; set;}
-    public string? category {get; set;}
+    public int Amount {get; set;}
+    public string? Category {get; set;}
     public DateTime CreatedAt {get; set;}
     public string? About { get; set; }
-    public Expense(int amount, string category)
+    public Expense(int Amount, string Category)
     {
 
-        this.amount = amount;
-        this.category = category;
+        this.Amount = Amount;
+        this.Category = Category;
         CreatedAt = DateTime.UtcNow;
     }
 }
