@@ -16,11 +16,11 @@ app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime?
     }
     if(dateFirst != null)
     {
-        res = res.Where(x => x.CreatedAt >= dateFirst);
+        res = res.Where(x => x.CreatedAt.Date >= dateFirst);
     }
     if(dateLast != null)
     {
-        res = res.Where(x => x.CreatedAt <= dateLast);
+        res = res.Where(x => x.CreatedAt.Date <= dateLast);
     }
     if(sum != null)
     {
@@ -43,12 +43,21 @@ app.MapGet("/GetById/{id:int:min(1)}",
 
 app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf) =>
 {
-    if(conf.Value.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
+    var ruls = conf.Value;
+    if(ruls.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
     {
-        var res = exp.Create(new Expense(body.Amount, body.Category));
-        return Results.Created($"/GetById/{res.Id}", res);
+        return Results.BadRequest($"Категория '{body.Category}' не разрешена");
     }
-    return Results.BadRequest($"Категория '{body.Category}' не разрешена");
+    if(body.Amount > 0)
+    {
+        return Results.BadRequest($"Сумма '{body.Amount}' не разрешена"); 
+    }
+    if(DateTime.TryParse(body.CreatedAt, out var result) || result < DateTime.UtcNow)
+    {
+        return Results.BadRequest($"Дата '{body.CreatedAt}' не разрешена"); 
+    }
+    var res = exp.Create(new Expense(body.Amount, body.Category, body.CreatedAt));
+    return Results.Created($"/GetById/{res.Id}", res);
 });
 app.MapDelete("/Delete/{id:int:min(1)}", (IExpenseService exp, int id) => exp.Delete(id) ? Results.NoContent() : Results.NotFound());
 app.Map("/", (IOptions<AppSettings> conf) =>
@@ -63,8 +72,9 @@ public class AppSettings
 {
     public string Currency {get; set;} ="";
     public string[] Categories {get; set;} = [];
+    public string CreatedAt {get; set;} ="";
 }
-public record CreateExpenseRequest(int Amount, string Category);
+public record CreateExpenseRequest(int Amount, string Category, string CreatedAt);
 public interface IExpenseService
 {
     List<Expense> GetAll();
@@ -96,11 +106,11 @@ public class Expense
     public string Category {get; set;}
     public DateTime CreatedAt {get; set;}
     public string About { get; set; } ="";
-    public Expense(int Amount, string Category)
+    public Expense(int Amount, string Category, string CreatedAt)
     {
 
         this.Amount = Amount;
         this.Category = Category;
-        CreatedAt = DateTime.UtcNow;
+        this.CreatedAt = DateTime.Parse(CreatedAt);
     }
 }

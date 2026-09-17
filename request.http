@@ -10,7 +10,8 @@ Content-Type: application/json
 
 {
   "amount": 3,
-  "category": "food"
+  "category": "food",
+  "createdAt": "2026-09-17"
 }
 
 
