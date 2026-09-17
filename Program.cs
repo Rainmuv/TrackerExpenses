@@ -7,8 +7,40 @@ var app = builder.Build();
 
 
 
-app.MapGet("/GetAll", (IExpenseService exp) => Results.Ok(exp.GetAll()));
-app.MapGet("/GetById/{id:int:min(1)}", (IExpenseService exp, int id) => exp.GetById(id) is Expense ex ? Results.Ok(ex) : Results.NotFound());
+app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending) =>
+{
+    IEnumerable<Expense> res = exp.GetAll();
+    if(category != null)
+    {
+        res = res.Where(x => x.Category.Contains(category));
+    }
+    if(dateFirst != null)
+    {
+        res = res.Where(x => x.CreatedAt >= dateFirst);
+    }
+    if(dateLast != null)
+    {
+        res = res.Where(x => x.CreatedAt <= dateLast);
+    }
+    if(sum != null)
+    {
+        res = res.Where(x => x.Amount == sum);
+    }
+    if(sortSetting != null)
+    {
+        if(sortSetting == "amount")
+        {
+            res = descending??false ? res.OrderByDescending(n => n.Amount) : res.OrderBy(n => n.Amount);
+        } else if(sortSetting == "date")
+        {
+            res = descending??false ? res.OrderByDescending(n => n.CreatedAt) : res.OrderBy(n => n.CreatedAt);
+        }
+    }
+    return  Results.Ok(res);
+});
+app.MapGet("/GetById/{id:int:min(1)}", 
+    (IExpenseService exp, int id) => exp.GetById(id) is Expense ex ? Results.Ok(ex) : Results.NotFound());
+
 app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf) =>
 {
     if(conf.Value.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
@@ -61,9 +93,9 @@ public class Expense
 {
     public int Id {get; set;} 
     public int Amount {get; set;}
-    public string? Category {get; set;}
+    public string Category {get; set;}
     public DateTime CreatedAt {get; set;}
-    public string? About { get; set; }
+    public string About { get; set; } ="";
     public Expense(int Amount, string Category)
     {
 

@@ -9,8 +9,8 @@ POST http://localhost:5170/Create
 Content-Type: application/json
 
 {
-  "amount": 10,
-  "category": "lol2"
+  "amount": 3,
+  "category": "food"
 }
 
 
