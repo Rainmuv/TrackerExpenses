@@ -5,7 +5,27 @@ builder.Services.AddSingleton<IExpenseService, ExpenseService>();
 builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("SettingProgram"));
 var app = builder.Build();  
 
+app.Environment.EnvironmentName = "Production";
 
+if(!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler(async app => app.Run(async context =>
+    {
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+
+        context.Response.StatusCode = 500;
+        logger.LogError("Error! 500");
+        await context.Response.WriteAsync("Error!");
+    }));
+}
+
+app.UseStatusCodePages(async context =>
+{
+   context.HttpContext.Response.ContentType = "application/json";
+   await context.HttpContext.Response.WriteAsync(
+        $"{{\"error\": \"Запрос завершился с кодом {context.HttpContext.Response.StatusCode}\"}}"
+    );
+});
 
 app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending) =>
 {
