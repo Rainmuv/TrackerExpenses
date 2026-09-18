@@ -2,15 +2,15 @@ GET http://localhost:5170/GetAll
 
 
 ###
-GET http://localhost:5170/GetById/1
+GET http://localhost:5170/GetById/3
 
 ### Создать
 POST http://localhost:5170/Create
 Content-Type: application/json
 
 {
-  "amount": 3,
-  "category": "food",
+  "amount": 633,
+  "category": "transport",
   "createdAt": "2026-09-17"
 }
 

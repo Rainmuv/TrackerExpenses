@@ -38,28 +38,48 @@ app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime?
     }
     return  Results.Ok(res);
 });
-app.MapGet("/GetById/{id:int:min(1)}", 
-    (IExpenseService exp, int id) => exp.GetById(id) is Expense ex ? Results.Ok(ex) : Results.NotFound());
+app.MapGet("/GetById/{id:int:min(1)}", (IExpenseService exp, int id, ILogger<Program> logger) => {
+    if(exp.GetById(id) is Expense ex)
+    {
+        logger.LogInformation("Найден эелемент с айди {id}", id);
+        return Results.Ok(ex);
+    }
+    logger.LogWarning("Элемент не был найден {id}", id);
+    return Results.NotFound();
+    });
 
-app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf) =>
+app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf, ILogger<Program> logger) =>
 {
     var ruls = conf.Value;
-    if(ruls.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
+    if(!ruls.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
     {
+        logger.LogWarning("Не удалось создать потому что-Категория '{body.Category}' не разрешена", body.Category);
         return Results.BadRequest($"Категория '{body.Category}' не разрешена");
     }
-    if(body.Amount > 0)
+    if(body.Amount < 0)
     {
+        logger.LogWarning("Не удалось создать потому что-Сумма '{body.Amount}' не разрешена", body.Amount);
         return Results.BadRequest($"Сумма '{body.Amount}' не разрешена"); 
     }
-    if(DateTime.TryParse(body.CreatedAt, out var result) || result < DateTime.UtcNow)
+    if(!DateTime.TryParse(body.CreatedAt, out var result) || result >= DateTime.UtcNow.Date)
     {
+        logger.LogWarning("Не удалось создать потому что-Дата '{body.CreatedAt}' не разрешена", body.CreatedAt);
         return Results.BadRequest($"Дата '{body.CreatedAt}' не разрешена"); 
     }
     var res = exp.Create(new Expense(body.Amount, body.Category, body.CreatedAt));
+    logger.LogInformation("Создан эелемент с айди {res.Id}", res.Id);
     return Results.Created($"/GetById/{res.Id}", res);
 });
-app.MapDelete("/Delete/{id:int:min(1)}", (IExpenseService exp, int id) => exp.Delete(id) ? Results.NoContent() : Results.NotFound());
+app.MapDelete("/Delete/{id:int:min(1)}", (IExpenseService exp, int id, ILogger<Program> logger) => {
+    
+    if(exp.Delete(id))
+    {
+        logger.LogInformation("Удалён эелемент с айди {id}", id);
+        return Results.NoContent();
+    } 
+    logger.LogWarning("Элемент {id} не был найден при удалении", id);
+    return Results.NotFound();
+    });
 app.Map("/", (IOptions<AppSettings> conf) =>
 {
     var op = conf.Value;
