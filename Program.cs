@@ -1,8 +1,12 @@
 using Microsoft.Extensions.Options;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSingleton<IExpenseService, ExpenseService>();
+var connection = builder.Configuration.GetConnectionString("DefaultConnection");
+builder.Services.AddScoped<IExpenseService, ExpenseService>();
 builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("SettingProgram"));
+builder.Services.AddDbContext<ApplicationContext>(options => options.UseSqlServer(connection));
+
 var app = builder.Build();  
 
 app.Environment.EnvironmentName = "Production";
@@ -86,7 +90,7 @@ app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions
         logger.LogWarning("Не удалось создать потому что-Дата '{body.CreatedAt}' не разрешена", body.CreatedAt);
         return Results.BadRequest($"Дата '{body.CreatedAt}' не разрешена"); 
     }
-    var res = exp.Create(new Expense(body.Amount, body.Category, body.CreatedAt));
+    var res = exp.Create(new Expense(body.Amount, body.Category, DateTime.Parse(body.CreatedAt)));
     logger.LogInformation("Создан эелемент с айди {res.Id}", res.Id);
     return Results.Created($"/GetById/{res.Id}", res);
 });
@@ -108,11 +112,23 @@ app.Map("/", (IOptions<AppSettings> conf) =>
 app.Run();
 
 
+public class ApplicationContext: DbContext
+{
+    public DbSet<Expense> expenses {get; set;} = null!;
+    public ApplicationContext(DbContextOptions options) : base(options)
+    {
+        Database.EnsureCreated();
+    }
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Expense>().HasData();
+    }
+}
+
 public class AppSettings
 {
     public string Currency {get; set;} ="";
     public string[] Categories {get; set;} = [];
-    public string CreatedAt {get; set;} ="";
 }
 public record CreateExpenseRequest(int Amount, string Category, string CreatedAt);
 public interface IExpenseService
@@ -125,18 +141,30 @@ public interface IExpenseService
 
 public class ExpenseService : IExpenseService
 {
-    private readonly List<Expense> expenses = new();
-    private int nextId = 1;
-    public List<Expense> GetAll() => expenses;
-    public Expense? GetById(int Id) => expenses.FirstOrDefault(e => e.Id == Id);
+    private readonly ApplicationContext context;
+    public ExpenseService(ApplicationContext context)
+    {
+        this.context = context;
+    }
+    public List<Expense> GetAll() => context.expenses.ToList();
+    public Expense? GetById(int Id) => context.expenses.FirstOrDefault(e => e.Id == Id);
     public Expense Create(Expense expense)
     {
-        expense.Id = nextId++;
-        expenses.Add(expense);
-        Console.WriteLine(expenses);
+        context.expenses.Add(expense);
+        Console.WriteLine(context.expenses);
+        context.SaveChanges();
         return expense;
     }
-    public bool Delete(int Id) => expenses.RemoveAll(e => e.Id == Id) > 0;
+    public bool Delete(int Id)  {
+        var res = context.expenses.FirstOrDefault(e => e.Id == Id);
+        if(res != null)
+        {
+            context.expenses.Remove(res);
+            context.SaveChanges();
+            return true;
+        }
+        return false;
+    }
 }
 
 public class Expense
@@ -146,11 +174,11 @@ public class Expense
     public string Category {get; set;}
     public DateTime CreatedAt {get; set;}
     public string About { get; set; } ="";
-    public Expense(int Amount, string Category, string CreatedAt)
+    public Expense(int Amount, string Category, DateTime CreatedAt)
     {
 
         this.Amount = Amount;
         this.Category = Category;
-        this.CreatedAt = DateTime.Parse(CreatedAt);
+        this.CreatedAt = CreatedAt;
     }
 }
