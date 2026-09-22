@@ -1,13 +1,36 @@
 using Microsoft.Extensions.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 var connection = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddScoped<IExpenseService, ExpenseService>();
 builder.Services.Configure<AppSettings>(builder.Configuration.GetSection("SettingProgram"));
 builder.Services.AddDbContext<ApplicationContext>(options => options.UseSqlServer(connection));
+builder.Services.AddAuthorization();
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer((options) =>
+{
+    var jwtKey = builder.Configuration["JWT:KEY"];
+    if(jwtKey == null) throw new Exception("Error with authorization"); 
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+       ValidateIssuer = true,
+       ValidIssuer = builder.Configuration["JWT:Issuer"],
+       ValidateAudience = true,
+       ValidAudience = builder.Configuration["JWT:Audience"],
+       ValidateLifetime = true,
+       ValidateIssuerSigningKey = true,
+       IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+    };
+});
 
 var app = builder.Build();  
+
+app.UseAuthentication();
+app.UseAuthorization();
+
 
 app.Environment.EnvironmentName = "Production";
 
@@ -29,6 +52,17 @@ app.UseStatusCodePages(async context =>
    await context.HttpContext.Response.WriteAsync(
         $"{{\"error\": \"Запрос завершился с кодом {context.HttpContext.Response.StatusCode}\"}}"
     );
+});
+
+
+app.MapPost("/Register/{username}-{password}", (string username, string password) =>
+{
+    
+});
+
+app.MapGet("/Login/{username}-{password}", (string username, string password) =>
+{
+    
 });
 
 app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending) =>
@@ -115,6 +149,7 @@ app.Run();
 public class ApplicationContext: DbContext
 {
     public DbSet<Expense> expenses {get; set;} = null!;
+    public DbSet<User> users {get; set;} = null!;
     public ApplicationContext(DbContextOptions options) : base(options)
     {
         Database.EnsureCreated();
@@ -129,7 +164,11 @@ public class AppSettings
 {
     public string Currency {get; set;} ="";
     public string[] Categories {get; set;} = [];
+    public string Issuer {get; set;} ="";
+    public string Audience {get; set;} ="";
+    public string KEY {get; set;} ="";
 }
+public record CreateUserRequest(int Id, string UserName, string PasswordHash);
 public record CreateExpenseRequest(int Amount, string Category, string CreatedAt);
 public interface IExpenseService
 {
@@ -164,6 +203,19 @@ public class ExpenseService : IExpenseService
             return true;
         }
         return false;
+    }
+}
+
+public class User
+{
+    public int Id {get; set;}
+    public string UserName {get; set;} = "";
+    public string PasswordHash {get; set;} ="";
+    public User(int Id, string UserName, string PasswordHash)
+    {
+        this.Id =Id;
+        this.UserName = UserName;
+        this.PasswordHash = BCrypt.Net.BCrypt.HashPassword(PasswordHash);
     }
 }
 
