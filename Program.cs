@@ -5,6 +5,7 @@ using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Security.Claims;
 using System.IdentityModel.Tokens.Jwt;
+using Microsoft.AspNetCore.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 var connection = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -75,7 +76,7 @@ app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOpti
     if(user is null) return Results.Unauthorized();
     if(BCrypt.Net.BCrypt.Verify(body.Password, user.PasswordHash)) return Results.Unauthorized();
 
-    var claims = new List<Claim> {new Claim(ClaimTypes.Name, user.UserName)};
+    var claims = new List<Claim> {new Claim(ClaimTypes.Name, user.UserName),new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())};
     var jwt = new JwtSecurityToken(
         issuer: settings.Value.JWTSettings.Issuer,
         audience: settings.Value.JWTSettings.Audience,
@@ -94,9 +95,13 @@ app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOpti
     return Results.Json(response);
 });
 
-app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending) =>
+app.MapGet("/GetAll", [Authorize] (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending, HttpContext httpcontext) =>
 {
     IEnumerable<Expense> res = exp.GetAll();
+    if(int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId))
+    {
+        res = res.Where(x => x.UserId ==resId);
+    }
     if(category != null)
     {
         res = res.Where(x => x.Category.Contains(category));
@@ -125,17 +130,21 @@ app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime?
     }
     return  Results.Ok(res);
 });
-app.MapGet("/GetById/{id:int:min(1)}", (IExpenseService exp, int id, ILogger<Program> logger) => {
+app.MapGet("/GetById/{id:int:min(1)}", [Authorize] (IExpenseService exp, int id, ILogger<Program> logger, HttpContext httpcontext) => {
     if(exp.GetById(id) is Expense ex)
-    {
-        logger.LogInformation("Найден эелемент с айди {id}", id);
-        return Results.Ok(ex);
+    {   
+        int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId);
+        if(ex.UserId == resId)
+        {
+            logger.LogInformation("Найден эелемент с айди {id}", id);
+            return Results.Ok(ex);
+        } 
     }
     logger.LogWarning("Элемент не был найден {id}", id);
     return Results.NotFound();
     });
 
-app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf, ILogger<Program> logger) =>
+app.MapPost("/Create", [Authorize] (IExpenseService exp, CreateExpenseRequest body, IOptions<AppSettings> conf, ILogger<Program> logger, HttpContext httpcontext) =>
 {
     var ruls = conf.Value;
     if(!ruls.Categories.Any(c => c.Equals(body.Category, StringComparison.OrdinalIgnoreCase)))
@@ -153,17 +162,24 @@ app.MapPost("/Create", (IExpenseService exp, CreateExpenseRequest body, IOptions
         logger.LogWarning("Не удалось создать потому что-Дата '{body.CreatedAt}' не разрешена", body.CreatedAt);
         return Results.BadRequest($"Дата '{body.CreatedAt}' не разрешена"); 
     }
-    var res = exp.Create(new Expense(body.Amount, body.Category, DateTime.Parse(body.CreatedAt)));
+    if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
+    var res = exp.Create(new Expense(resId,body.Amount, body.Category, DateTime.Parse(body.CreatedAt)));
     logger.LogInformation("Создан эелемент с айди {res.Id}", res.Id);
     return Results.Created($"/GetById/{res.Id}", res);
 });
-app.MapDelete("/Delete/{id:int:min(1)}", (IExpenseService exp, int id, ILogger<Program> logger) => {
-    
-    if(exp.Delete(id))
-    {
-        logger.LogInformation("Удалён эелемент с айди {id}", id);
-        return Results.NoContent();
-    } 
+app.MapDelete("/Delete/{id:int:min(1)}", [Authorize] (IExpenseService exp, int id, ILogger<Program> logger, HttpContext httpcontext) => {
+    if(exp.GetById(id) is Expense ex)
+    {   
+        int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId);
+        if(ex.UserId == resId)
+        {
+            if(exp.Delete(id))
+            {
+                logger.LogInformation("Удалён эелемент с айди {id}", id);
+                return Results.NoContent();
+            } 
+        } 
+    }
     logger.LogWarning("Элемент {id} не был найден при удалении", id);
     return Results.NotFound();
     });
@@ -252,14 +268,15 @@ public class User
 
 public class Expense
 {
+    public int UserId {get; set;} 
     public int Id {get; set;} 
     public int Amount {get; set;}
     public string Category {get; set;}
     public DateTime CreatedAt {get; set;}
     public string About { get; set; } ="";
-    public Expense(int Amount, string Category, DateTime CreatedAt)
+    public Expense(int UserId, int Amount, string Category, DateTime CreatedAt)
     {
-
+        this.UserId = UserId;
         this.Amount = Amount;
         this.Category = Category;
         this.CreatedAt = CreatedAt;
