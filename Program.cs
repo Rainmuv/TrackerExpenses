@@ -35,7 +35,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 
-app.Environment.EnvironmentName = "Production";
+// app.Environment.EnvironmentName = "Production";
 
 if(!app.Environment.IsDevelopment())
 {
@@ -62,7 +62,7 @@ app.MapPost("/Register", (CreateUserRequest body, ApplicationContext context) =>
 {
     if(context.users.FirstOrDefault(c => c.UserName == body.UserName) == null)
     {
-        context.users.Add(new User(body.UserName, body.Password));
+        context.users.Add(new User(body.UserName, BCrypt.Net.BCrypt.HashPassword(body.Password)));
         context.SaveChanges();
         return Results.NoContent();
     }
@@ -74,8 +74,9 @@ app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOpti
 {
     User? user = context.users.FirstOrDefault(c => c.UserName == body.UserName);
     if(user is null) return Results.Unauthorized();
-    if(BCrypt.Net.BCrypt.Verify(body.Password, user.PasswordHash)) return Results.Unauthorized();
-
+    var isValid = BCrypt.Net.BCrypt.Verify(body.Password, user.PasswordHash);
+    Console.WriteLine($"Verify result = {isValid}, password = '{body.Password}', hash = '{user.PasswordHash}'");
+    if(!isValid) return Results.Unauthorized();
     var claims = new List<Claim> {new Claim(ClaimTypes.Name, user.UserName),new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())};
     var jwt = new JwtSecurityToken(
         issuer: settings.Value.JWTSettings.Issuer,
@@ -98,10 +99,8 @@ app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOpti
 app.MapGet("/GetAll", [Authorize] (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending, HttpContext httpcontext) =>
 {
     IEnumerable<Expense> res = exp.GetAll();
-    if(int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId))
-    {
-        res = res.Where(x => x.UserId ==resId);
-    }
+    if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
+    res = res.Where(x => x.UserId ==resId);
     if(category != null)
     {
         res = res.Where(x => x.Category.Contains(category));
@@ -133,7 +132,7 @@ app.MapGet("/GetAll", [Authorize] (IExpenseService exp, string? category,int? su
 app.MapGet("/GetById/{id:int:min(1)}", [Authorize] (IExpenseService exp, int id, ILogger<Program> logger, HttpContext httpcontext) => {
     if(exp.GetById(id) is Expense ex)
     {   
-        int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId);
+        if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
         if(ex.UserId == resId)
         {
             logger.LogInformation("Найден эелемент с айди {id}", id);
@@ -163,14 +162,14 @@ app.MapPost("/Create", [Authorize] (IExpenseService exp, CreateExpenseRequest bo
         return Results.BadRequest($"Дата '{body.CreatedAt}' не разрешена"); 
     }
     if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
-    var res = exp.Create(new Expense(resId,body.Amount, body.Category, DateTime.Parse(body.CreatedAt)));
+    var res = exp.Create(new Expense(resId,body.Amount, body.Category, result));
     logger.LogInformation("Создан эелемент с айди {res.Id}", res.Id);
     return Results.Created($"/GetById/{res.Id}", res);
 });
 app.MapDelete("/Delete/{id:int:min(1)}", [Authorize] (IExpenseService exp, int id, ILogger<Program> logger, HttpContext httpcontext) => {
     if(exp.GetById(id) is Expense ex)
     {   
-        int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId);
+        if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
         if(ex.UserId == resId)
         {
             if(exp.Delete(id))
@@ -198,10 +197,6 @@ public class ApplicationContext: DbContext
     public ApplicationContext(DbContextOptions options) : base(options)
     {
         Database.EnsureCreated();
-    }
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        modelBuilder.Entity<Expense>().HasData();
     }
 }
 
@@ -262,7 +257,7 @@ public class User
     public User(string UserName, string PasswordHash)
     {
         this.UserName = UserName;
-        this.PasswordHash = BCrypt.Net.BCrypt.HashPassword(PasswordHash);
+        this.PasswordHash = PasswordHash;
     }
 }
 
