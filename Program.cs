@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
 
 var builder = WebApplication.CreateBuilder(args);
 var connection = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -12,14 +14,14 @@ builder.Services.AddDbContext<ApplicationContext>(options => options.UseSqlServe
 builder.Services.AddAuthorization();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer((options) =>
 {
-    var jwtKey = builder.Configuration["JWT:KEY"];
+    var jwtKey = builder.Configuration["SettingProgram:JWTSettings:KEY"];
     if(jwtKey == null) throw new Exception("Error with authorization"); 
     options.TokenValidationParameters = new TokenValidationParameters
     {
        ValidateIssuer = true,
-       ValidIssuer = builder.Configuration["JWT:Issuer"],
+       ValidIssuer = builder.Configuration["SettingProgram:JWTSettings:Issuer"],
        ValidateAudience = true,
-       ValidAudience = builder.Configuration["JWT:Audience"],
+       ValidAudience = builder.Configuration["SettingProgram:JWTSettings:Audience"],
        ValidateLifetime = true,
        ValidateIssuerSigningKey = true,
        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
@@ -55,14 +57,41 @@ app.UseStatusCodePages(async context =>
 });
 
 
-app.MapPost("/Register/{username}-{password}", (string username, string password) =>
+app.MapPost("/Register", (CreateUserRequest body, ApplicationContext context) =>
 {
+    if(context.users.FirstOrDefault(c => c.UserName == body.UserName) == null)
+    {
+        context.users.Add(new User(body.UserName, body.Password));
+        context.SaveChanges();
+        return Results.NoContent();
+    }
+    return Results.Conflict();
     
 });
 
-app.MapGet("/Login/{username}-{password}", (string username, string password) =>
+app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOptions<AppSettings> settings) =>
 {
-    
+    User? user = context.users.FirstOrDefault(c => c.UserName == body.UserName);
+    if(user is null) return Results.Unauthorized();
+    if(BCrypt.Net.BCrypt.Verify(body.Password, user.PasswordHash)) return Results.Unauthorized();
+
+    var claims = new List<Claim> {new Claim(ClaimTypes.Name, user.UserName)};
+    var jwt = new JwtSecurityToken(
+        issuer: settings.Value.JWTSettings.Issuer,
+        audience: settings.Value.JWTSettings.Audience,
+        claims: claims,
+        expires: DateTime.UtcNow.Add(TimeSpan.FromHours(1)),
+        signingCredentials: new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.Value.JWTSettings.KEY)), SecurityAlgorithms.HmacSha256)
+    );
+    var encodedJwt = new JwtSecurityTokenHandler().WriteToken(jwt);
+
+    var response = new
+    {
+      access_token = encodedJwt,
+      username = body.UserName  
+    };
+
+    return Results.Json(response);
 });
 
 app.MapGet("/GetAll", (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending) =>
@@ -164,11 +193,15 @@ public class AppSettings
 {
     public string Currency {get; set;} ="";
     public string[] Categories {get; set;} = [];
+    public JWT JWTSettings {get; set;} = new();
+}
+public class JWT
+{
     public string Issuer {get; set;} ="";
     public string Audience {get; set;} ="";
     public string KEY {get; set;} ="";
 }
-public record CreateUserRequest(int Id, string UserName, string PasswordHash);
+public record CreateUserRequest(string UserName, string Password);
 public record CreateExpenseRequest(int Amount, string Category, string CreatedAt);
 public interface IExpenseService
 {
@@ -190,7 +223,6 @@ public class ExpenseService : IExpenseService
     public Expense Create(Expense expense)
     {
         context.expenses.Add(expense);
-        Console.WriteLine(context.expenses);
         context.SaveChanges();
         return expense;
     }
@@ -211,9 +243,8 @@ public class User
     public int Id {get; set;}
     public string UserName {get; set;} = "";
     public string PasswordHash {get; set;} ="";
-    public User(int Id, string UserName, string PasswordHash)
+    public User(string UserName, string PasswordHash)
     {
-        this.Id =Id;
         this.UserName = UserName;
         this.PasswordHash = BCrypt.Net.BCrypt.HashPassword(PasswordHash);
     }
