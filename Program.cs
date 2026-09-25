@@ -64,7 +64,7 @@ app.MapPost("/Register", (CreateUserRequest body, ApplicationContext context) =>
     {
         context.users.Add(new User(body.UserName, BCrypt.Net.BCrypt.HashPassword(body.Password)));
         context.SaveChanges();
-        return Results.NoContent();
+        return Results.Created();
     }
     return Results.Conflict();
     
@@ -75,7 +75,6 @@ app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOpti
     User? user = context.users.FirstOrDefault(c => c.UserName == body.UserName);
     if(user is null) return Results.Unauthorized();
     var isValid = BCrypt.Net.BCrypt.Verify(body.Password, user.PasswordHash);
-    Console.WriteLine($"Verify result = {isValid}, password = '{body.Password}', hash = '{user.PasswordHash}'");
     if(!isValid) return Results.Unauthorized();
     var claims = new List<Claim> {new Claim(ClaimTypes.Name, user.UserName),new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())};
     var jwt = new JwtSecurityToken(
@@ -98,9 +97,8 @@ app.MapPost("/Login", (CreateUserRequest body, ApplicationContext context, IOpti
 
 app.MapGet("/GetAll", [Authorize] (IExpenseService exp, string? category,int? sum, DateTime? dateFirst, DateTime? dateLast, string? sortSetting, bool? descending, HttpContext httpcontext) =>
 {
-    IEnumerable<Expense> res = exp.GetAll();
-    if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
-    res = res.Where(x => x.UserId ==resId);
+    if (!httpcontext.TryGetUserId(out var resId)) return Results.Unauthorized();
+    IEnumerable<Expense> res = exp.GetAllForUser(resId);
     if(category != null)
     {
         res = res.Where(x => x.Category.Contains(category));
@@ -132,7 +130,7 @@ app.MapGet("/GetAll", [Authorize] (IExpenseService exp, string? category,int? su
 app.MapGet("/GetById/{id:int:min(1)}", [Authorize] (IExpenseService exp, int id, ILogger<Program> logger, HttpContext httpcontext) => {
     if(exp.GetById(id) is Expense ex)
     {   
-        if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
+        if (!httpcontext.TryGetUserId(out var resId)) return Results.Unauthorized();
         if(ex.UserId == resId)
         {
             logger.LogInformation("Найден эелемент с айди {id}", id);
@@ -151,17 +149,17 @@ app.MapPost("/Create", [Authorize] (IExpenseService exp, CreateExpenseRequest bo
         logger.LogWarning("Не удалось создать потому что-Категория '{body.Category}' не разрешена", body.Category);
         return Results.BadRequest($"Категория '{body.Category}' не разрешена");
     }
-    if(body.Amount < 0)
+    if(body.Amount <= 0)
     {
         logger.LogWarning("Не удалось создать потому что-Сумма '{body.Amount}' не разрешена", body.Amount);
         return Results.BadRequest($"Сумма '{body.Amount}' не разрешена"); 
     }
-    if(!DateTime.TryParse(body.CreatedAt, out var result) || result >= DateTime.UtcNow.Date)
+    if(!DateTime.TryParse(body.CreatedAt, out var result) || result.Date > DateTime.UtcNow.Date)
     {
         logger.LogWarning("Не удалось создать потому что-Дата '{body.CreatedAt}' не разрешена", body.CreatedAt);
         return Results.BadRequest($"Дата '{body.CreatedAt}' не разрешена"); 
     }
-    if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
+    if (!httpcontext.TryGetUserId(out var resId)) return Results.Unauthorized();
     var res = exp.Create(new Expense(resId,body.Amount, body.Category, result));
     logger.LogInformation("Создан эелемент с айди {res.Id}", res.Id);
     return Results.Created($"/GetById/{res.Id}", res);
@@ -169,7 +167,7 @@ app.MapPost("/Create", [Authorize] (IExpenseService exp, CreateExpenseRequest bo
 app.MapDelete("/Delete/{id:int:min(1)}", [Authorize] (IExpenseService exp, int id, ILogger<Program> logger, HttpContext httpcontext) => {
     if(exp.GetById(id) is Expense ex)
     {   
-        if(!int.TryParse(httpcontext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out int resId)) return Results.Unauthorized();
+        if (!httpcontext.TryGetUserId(out var resId)) return Results.Unauthorized();
         if(ex.UserId == resId)
         {
             if(exp.Delete(id))
@@ -216,7 +214,7 @@ public record CreateUserRequest(string UserName, string Password);
 public record CreateExpenseRequest(int Amount, string Category, string CreatedAt);
 public interface IExpenseService
 {
-    List<Expense> GetAll();
+    List<Expense> GetAllForUser(int userId);
     Expense? GetById(int id);
     Expense Create(Expense expense);
     bool Delete(int id);
@@ -229,7 +227,7 @@ public class ExpenseService : IExpenseService
     {
         this.context = context;
     }
-    public List<Expense> GetAll() => context.expenses.ToList();
+    public List<Expense> GetAllForUser(int userId) => context.expenses.Where(x => x.UserId == userId).ToList();
     public Expense? GetById(int Id) => context.expenses.FirstOrDefault(e => e.Id == Id);
     public Expense Create(Expense expense)
     {
@@ -268,12 +266,20 @@ public class Expense
     public int Amount {get; set;}
     public string Category {get; set;}
     public DateTime CreatedAt {get; set;}
-    public string About { get; set; } ="";
     public Expense(int UserId, int Amount, string Category, DateTime CreatedAt)
     {
         this.UserId = UserId;
         this.Amount = Amount;
         this.Category = Category;
         this.CreatedAt = CreatedAt;
+    }
+}
+
+
+public static class HttpContextExtension
+{
+    public static bool TryGetUserId(this HttpContext context, out int userId)
+    {
+        return int.TryParse(context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value, out userId);
     }
 }
